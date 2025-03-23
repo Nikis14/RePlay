@@ -1,4 +1,4 @@
-from typing import NamedTuple, Optional, cast, Mapping
+from typing import NamedTuple, Optional, cast
 
 import torch
 
@@ -45,6 +45,8 @@ class SasRecLLMTrainingDataset(SasRecTrainingDataset):
         """
         :param sequential: Sequential dataset with training data.
         :param max_sequence_length: Max length of sequence.
+        :param user_profile_embeddings: User profile embeddings tensor.
+        :param existing_profile_binary_mask: Binary mask for missing profiles.
         :param sequence_shift: Shift of sequence to predict.
         :param sliding_window_step: A sliding window step.
             If not ``None`` provides iteration over sequences with window.
