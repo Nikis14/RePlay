@@ -22,7 +22,6 @@ class SasRecModel(torch.nn.Module):
         dropout: float = 0.2,
         ti_modification: bool = False,
         time_span: int = 256,
-        **kwargs,
     ) -> None:
         """
         :param schema: Tensor schema of features.
@@ -417,8 +416,7 @@ class SasRecLayers(torch.nn.Module):
         seqs: torch.Tensor,
         attention_mask: torch.BoolTensor,
         padding_mask: torch.BoolTensor,
-        return_hidden_states: bool = False
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, list]]:
+    ) -> torch.Tensor:
         """
         :param seqs: Item embeddings.
         :param attention_mask: Attention mask.
@@ -426,23 +424,16 @@ class SasRecLayers(torch.nn.Module):
 
         :returns: Output embeddings.
         """
-        hidden_states__list = []
-        num_blocks = len(self.attention_layers)
-        for i in range(num_blocks):
+        length = len(self.attention_layers)
+        for i in range(length):
             query = self.attention_layernorms[i](seqs)
-            attent_emb, _ = self.attention_layers[i](
-                query, seqs, seqs, attn_mask=attention_mask, need_weights=False)
+            attent_emb, _ = self.attention_layers[i](query, seqs, seqs, attn_mask=attention_mask, need_weights=False)
             seqs = query + attent_emb
 
             seqs = self.forward_layernorms[i](seqs)
             seqs = self.forward_layers[i](seqs)
             seqs *= padding_mask
 
-            if return_hidden_states:
-                hidden_states__list.append(seqs.clone())
-
-        if return_hidden_states:
-            return seqs, hidden_states__list
         return seqs
 
     def _layers_stacker(self, num_blocks: int, layer_class: Any, *args, **kwargs) -> torch.nn.ModuleList:
@@ -685,8 +676,7 @@ class TiSasRecLayers(torch.nn.Module):
         padding_mask: torch.BoolTensor,
         ti_embeddings: Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
         device: torch.device,
-        return_hidden_states: bool = False,
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, list]]:
+    ) -> torch.Tensor:
         """
         :param seqs: Item embeddings.
         :param attention_mask: Attention mask.
@@ -697,7 +687,6 @@ class TiSasRecLayers(torch.nn.Module):
 
         :returns: Output embeddings.
         """
-        hidden_states = []
         length = len(self.attention_layers)
         for i in range(length):
             query = self.attention_layernorms[i](seqs)
@@ -707,11 +696,6 @@ class TiSasRecLayers(torch.nn.Module):
             seqs = self.forward_layers[i](seqs)
             seqs *= padding_mask
 
-            if return_hidden_states:
-                hidden_states.append(seqs.clone())
-
-        if return_hidden_states:
-            return seqs, hidden_states
         return seqs
 
     def _layers_stacker(self, num_blocks: int, layer_class: Any, *args, **kwargs) -> torch.nn.ModuleList:

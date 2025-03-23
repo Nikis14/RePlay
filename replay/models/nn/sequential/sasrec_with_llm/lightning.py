@@ -1,8 +1,8 @@
 import math
-from typing import Any, Dict, Optional, Tuple, Union, cast
+from typing import Any, Optional, Tuple, cast
 
-import lightning
 import torch
+from torch import nn
 
 from replay.data.nn import TensorMap, TensorSchema
 from replay.models.nn.optimizer_utils import FatOptimizerFactory, LRSchedulerFactory, OptimizerFactory
@@ -14,10 +14,10 @@ from ..sasrec.lightning import SasRec
 
 class SasRecLLM(SasRec):
     """
-    SASRec Lightning module.
+    SASRecLLM Lightning module.
 
     You can get initialization parameters with attribute `hparams`
-    for object of SasRec instance.
+    for object of SasRecLLM instance.
     """
 
     def __init__(
@@ -38,16 +38,17 @@ class SasRecLLM(SasRec):
         optimizer_factory: OptimizerFactory = FatOptimizerFactory(),
         lr_scheduler_factory: Optional[LRSchedulerFactory] = None,
         scale_guide_loss: bool = False,
-        alpha: float = 0.,
+        alpha: float = 0.8,
         profile_distil_epochs: int = 0,
         reconstruction_layer: int = -1,
+        criterion_reconstruct_name: str = 'MSE',
         weighting_scheme='mean',
         use_down_scale=True,
         use_upscale=False,
         weight_scale=None,
         multi_profile=False,
         multi_profile_aggr_scheme='mean'
-    ):
+    ) -> None:
         """
         :param tensor_schema: Tensor schema of features.
         :param block_count: Number of Transformer blocks.
@@ -78,37 +79,79 @@ class SasRecLLM(SasRec):
             Default: ``FatOptimizerFactory``.
         :param lr_scheduler_factory: Learning rate schedule factory.
             Default: ``None``.
+        :param scale_guide_loss: Scale guide loss.
+            Default: ``False``.
+        :param alpha: Alpha value for loss.
+            Default: ``0.8``.
+        :param profile_distil_epochs: Profile distillation epochs.
+            Default: ``0``.
+        :param reconstruction_layer: Layer for reconstruction.
+            Default: ``-1``.
+        :param criterion_reconstruct_name: Name of criterion for reconstruction.
+            Default: ``MSE``.
+        :param weighting_scheme: Weighting scheme.
+            Default: ``mean``.
+        :param use_down_scale: Use down scale.
+            Default: ``True``.
+        :param use_upscale: Use upscale.
+            Default: ``False``.
+        :param weight_scale: Weight scale.
+            Default: ``None``.
+        :param multi_profile: Multi profile.
+            Default: ``False``.
+        :param multi_profile_aggr_scheme: Multi profile aggregation scheme.
+            Default: ``mean``.
         """
-        super().__init__(tensor_schema=tensor_schema,
-                         block_count=block_count,
-                         head_count=head_count,
-                         hidden_size=hidden_size,
-                         max_seq_len=max_seq_len,
-                         dropout_rate=dropout_rate,
-                         ti_modification=ti_modification,
-                         time_span=time_span,
-                         loss_type=loss_type,
-                         loss_sample_count=loss_sample_count,
-                         negative_sampling_strategy=negative_sampling_strategy,
-                         negatives_sharing=negatives_sharing,
-                         optimizer_factory=optimizer_factory,
-                         lr_scheduler_factory=lr_scheduler_factory,
-                         sasrec_model_class=SasRecLLMModel,
-                         profile_emb_dim=profile_emb_dim,
-                         reconstruction_layer=reconstruction_layer,
-                         weighting_scheme=weighting_scheme,
-                         use_down_scale=use_down_scale,
-                         use_upscale=use_upscale,
-                         weight_scale=weight_scale,
-                         multi_profile=multi_profile,
-                         multi_profile_aggr_scheme=multi_profile_aggr_scheme)
+        super().__init__(
+            tensor_schema=tensor_schema,
+            block_count=block_count,
+            head_count=head_count,
+            hidden_size=hidden_size,
+            max_seq_len=max_seq_len,
+            dropout_rate=dropout_rate,
+            ti_modification=ti_modification,
+            time_span=time_span,
+            loss_type=loss_type,
+            loss_sample_count=loss_sample_count,
+            negative_sampling_strategy=negative_sampling_strategy,
+            negatives_sharing=negatives_sharing,
+            optimizer_factory=optimizer_factory,
+            lr_scheduler_factory=lr_scheduler_factory,
+        )
+        self._model = SasRecLLMModel(schema=tensor_schema,
+                                     profile_emb_dim=profile_emb_dim,
+                                     num_blocks=block_count,
+                                     num_heads=head_count,
+                                     hidden_size=hidden_size,
+                                     max_len=max_seq_len,
+                                     dropout=dropout_rate,
+                                     ti_modification=ti_modification,
+                                     reconstruction_layer=reconstruction_layer,
+                                     weighting_scheme=weighting_scheme,
+                                     use_down_scale=use_down_scale,
+                                     use_upscale=use_upscale,
+                                     weight_scale=weight_scale,
+                                     multi_profile=multi_profile,
+                                     multi_profile_aggr_scheme=multi_profile_aggr_scheme)
         self.scale_guide_loss = scale_guide_loss
         self.alpha = alpha
         self.profile_distil_epochs = profile_distil_epochs
+        self.criterion_reconstruct = self._init_criterion_reconstruct(criterion_reconstruct_name)
+
+    def _init_criterion_reconstruct(self, criterion_name: str) -> Any:
+        """
+        :param criterion_name: Name of criterion for reconstruction.
+        :return: Criterion for reconstruction
+        """
+        if criterion_name == 'MSE':
+            return lambda x,y: nn.MSELoss()(x,y)
+        if criterion_name == 'RMSE':
+            return lambda x,y: torch.sqrt(nn.MSELoss()(x,y))
+        if criterion_name == 'CosSim':
+            return lambda x,y: 1 - torch.mean(nn.CosineSimilarity(dim=1, eps=1e-6)(x,y))
+        raise Exception('Not existing reconstruction loss')
 
     def _compute_loss(self, batch: SasRecLLMTrainingBatch) -> torch.Tensor:
-        # loss_func # nn mse
-
         if self._loss_type == "BCE":
             loss_func = self._compute_loss_bce if self._loss_sample_count is None else self._compute_loss_bce_sampled
         elif self._loss_type == "CE":
@@ -125,53 +168,47 @@ class SasRecLLM(SasRec):
             batch.labels_padding_mask,
         )
 
+        epoch = self.trainer.current_epoch
+        if epoch >= self.profile_distil_epochs:
+            return loss_model
         # reconstruction loss
         loss_guide = self._compute_loss_reconstruction(
             batch.user_profile_embeddings_batch,
             hidden_state,
-            batch.null_profile_binary_mask_batch,
-            torch.nn.MSELoss(),
+            batch.existing_profile_binary_mask_batch,
         )
         return self._merge_losses(loss_model, loss_guide)
 
     def _merge_losses(self, loss_model: torch.Tensor, loss_guide: torch.Tensor) -> torch.Tensor:
-        epoch = self.trainer.current_epoch
+        """
+        :param loss_model: Model loss
+        :param loss_guide: Guide loss
+
+        :return: Merged loss
+        """
         if self.scale_guide_loss:
-            loss_model_val = loss_model.item()
-            loss_guide_val = loss_guide.item()
+            loss_model_value = loss_model.item()
+            loss_guide_value = loss_guide.item()
             eps = 1e-8
 
-            scale_for_guide = loss_model_val / (loss_guide_val + eps)
-            scaled_loss_guide = loss_guide * scale_for_guide
-
-            if epoch < self.profile_distil_epochs:
-                loss = self.alpha * scaled_loss_guide + (1 - self.alpha) * loss_model
-            else:
-                loss = loss_model
-        else:
-            # Если self.scale_guide_loss=False, логика остаётся исходной
-            if epoch < self.profile_distil_epochs:
-                loss = self.alpha * loss_guide + (1 - self.alpha) * loss_model
-            else:
-                loss = loss_model
-        return loss
+            scale_for_guide = loss_model_value / (loss_guide_value + eps)
+            loss_guide = loss_guide * scale_for_guide
+        return self.alpha * loss_guide + (1 - self.alpha) * loss_model
 
     def _compute_loss_reconstruction(
         self,
         user_profile_emb: torch.Tensor,
         hidden_for_reconstruction: torch.Tensor,
-        null_profile_binary_mask_batch: torch.BoolTensor,
-        criterion_reconstruct_fn
+        existing_profile_binary_mask_batch: torch.BoolTensor,
     ) -> torch.Tensor:
         user_profile_emb_transformed = self._model.aggregate_profile(user_profile_emb)
         if self._model.use_upscale:
             hidden_for_reconstruction = self._model.hidden_layer_transform(hidden_for_reconstruction)
 
-        null_profile_binary_mask_batch = null_profile_binary_mask_batch.flatten()
-        user_profile_emb_transformed[null_profile_binary_mask_batch] = \
-            hidden_for_reconstruction[null_profile_binary_mask_batch]
+        existing_profile_binary_mask_batch = existing_profile_binary_mask_batch.flatten()
 
-        loss_guide = criterion_reconstruct_fn(hidden_for_reconstruction, user_profile_emb_transformed)
+        loss_guide = self.criterion_reconstruct(hidden_for_reconstruction[existing_profile_binary_mask_batch],
+                                              user_profile_emb_transformed[existing_profile_binary_mask_batch])
         return loss_guide
 
     def _compute_loss_bce(

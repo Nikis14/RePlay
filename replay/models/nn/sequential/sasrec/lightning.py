@@ -35,8 +35,6 @@ class SasRec(lightning.LightningModule):
         negatives_sharing: bool = False,
         optimizer_factory: OptimizerFactory = FatOptimizerFactory(),
         lr_scheduler_factory: Optional[LRSchedulerFactory] = None,
-        sasrec_model_class: Any = SasRecModel,
-        **kwargs
     ):
         """
         :param tensor_schema: Tensor schema of features.
@@ -71,7 +69,7 @@ class SasRec(lightning.LightningModule):
         """
         super().__init__()
         self.save_hyperparameters()
-        self._model = sasrec_model_class(
+        self._model = SasRecModel(
             schema=tensor_schema,
             num_blocks=block_count,
             num_heads=head_count,
@@ -80,7 +78,6 @@ class SasRec(lightning.LightningModule):
             dropout=dropout_rate,
             ti_modification=ti_modification,
             time_span=time_span,
-            **kwargs
         )
         self._loss_type = loss_type
         self._loss_sample_count = loss_sample_count

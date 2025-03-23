@@ -18,7 +18,7 @@ class SasRecLLMTrainingBatch(NamedTuple):
     """
 
     user_profile_embeddings_batch: torch.Tensor
-    null_profile_binary_mask_batch: torch.BoolTensor
+    existing_profile_binary_mask_batch: torch.BoolTensor
     query_id: torch.LongTensor
     padding_mask: torch.BoolTensor
     features: TensorMap
@@ -36,7 +36,7 @@ class SasRecLLMTrainingDataset(SasRecTrainingDataset):
         sequential: SequentialDataset,
         max_sequence_length: int,
         user_profile_embeddings: torch.FloatTensor,
-        null_profile_binary_mask: torch.BoolTensor,
+        existing_profile_binary_mask: torch.BoolTensor,
         sequence_shift: int = 1,
         sliding_window_step: Optional[None] = None,
         padding_value: int = 0,
@@ -63,13 +63,13 @@ class SasRecLLMTrainingDataset(SasRecTrainingDataset):
                          label_feature_name=label_feature_name)
 
         self.user_profile_embeddings = user_profile_embeddings
-        self.null_profile_binary_mask = null_profile_binary_mask
+        self.existing_profile_binary_mask = existing_profile_binary_mask
 
 
     def __getitem__(self, index: int) -> SasRecLLMTrainingBatch:
         query_id, padding_mask, features = self._inner[index]
         user_profile_emb_batch = self.user_profile_embeddings[query_id].squeeze(0)
-        null_profile_binary_mask_batch = self.null_profile_binary_mask[query_id]
+        existing_profile_binary_mask_batch = self.existing_profile_binary_mask[query_id]
 
         assert self._label_feature_name
         labels = features[self._label_feature_name][self._sequence_shift :]
@@ -83,7 +83,7 @@ class SasRecLLMTrainingDataset(SasRecTrainingDataset):
 
         return SasRecLLMTrainingBatch(
             user_profile_embeddings_batch=user_profile_emb_batch,
-            null_profile_binary_mask_batch=null_profile_binary_mask_batch,
+            existing_profile_binary_mask_batch=existing_profile_binary_mask_batch,
             query_id=query_id,
             features=output_features,
             padding_mask=cast(torch.BoolTensor, output_features_padding_mask),
