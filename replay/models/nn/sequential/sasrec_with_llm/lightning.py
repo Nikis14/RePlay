@@ -1,3 +1,4 @@
+import gc
 import math
 from typing import Any, Optional, Tuple, cast
 
@@ -118,6 +119,9 @@ class SasRecLLM(SasRec):
             optimizer_factory=optimizer_factory,
             lr_scheduler_factory=lr_scheduler_factory,
         )
+        # override SASRec model
+        del self._model
+        gc.collect()
         self._model = SasRecLLMModel(schema=tensor_schema,
                                      profile_emb_dim=profile_emb_dim,
                                      num_blocks=block_count,

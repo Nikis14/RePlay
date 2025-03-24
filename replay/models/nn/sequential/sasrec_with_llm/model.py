@@ -1,3 +1,4 @@
+import gc
 from typing import Tuple, Union
 
 import torch
@@ -76,6 +77,9 @@ class SasRecLLMModel(SasRecModel):
                          time_span=time_span)
 
         # override SASRec layers to return hidden states
+        del self.sasrec_layers
+        gc.collect()
+
         if self.ti_modification:
             self.sasrec_layers = TiSasRecWithHiddenLayers(
                 hidden_size=self.hidden_size,
